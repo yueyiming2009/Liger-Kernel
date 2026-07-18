@@ -2669,6 +2669,94 @@ def apply_liger_kernel_to_glm4v_moe(
                         _patch_swiglu_module(decoder_layer.mlp, LigerSwiGLUMLP)
 
 
+def apply_liger_kernel_to_glm_moe_dsa(
+    rope: bool = False,
+    cross_entropy: bool = False,
+    fused_linear_cross_entropy: bool = True,
+    rms_norm: bool = True,
+    swiglu: bool = True,
+    model: PreTrainedModel = None,
+) -> None:
+    """
+    Apply Liger kernels to replace original implementation in HuggingFace GLM-5 family models
+    (GLM-5 / GLM-5.1 / GLM-5.2, model_type ``glm_moe_dsa``).
+
+    NOTE: RoPE is not supported for GLM-5. It uses DeepSeek-style interleaved partial RoPE
+    that is incompatible with ``liger_rotary_pos_emb``. Passing ``rope=True`` emits a warning
+    and skips the kernel swap. The DSA indexer's ``k_norm`` is an ``nn.LayerNorm`` inside a
+    ``torch.no_grad`` forward (no backward pass), so it is intentionally left unpatched.
+
+    Args:
+        rope (bool): Whether to apply Liger's rotary position embedding. Default is False.
+            Currently unsupported; emits a warning and is a no-op.
+        cross_entropy (bool): Whether to apply Liger's cross entropy loss. Default is False.
+        fused_linear_cross_entropy (bool):
+            Whether to apply Liger's fused linear cross entropy loss. Default is True.
+            `cross_entropy` and `fused_linear_cross_entropy` cannot both be True.
+            If `fused_linear_cross_entropy` is True, the logits will not be materialized but more memory efficient.
+        rms_norm (bool): Whether to apply Liger's RMSNorm. Default is True.
+        swiglu (bool): Whether to apply Liger's SwiGLU MLP. Default is True. Patches the routed
+            experts, the shared experts, and the dense MLP layers.
+        model (PreTrainedModel): The model instance to apply Liger kernels to, if already loaded.
+            Default is None.
+    """
+    assert not (cross_entropy and fused_linear_cross_entropy), (
+        "cross_entropy and fused_linear_cross_entropy cannot both be True."
+    )
+
+    from transformers.models.glm_moe_dsa import modeling_glm_moe_dsa
+    from transformers.models.glm_moe_dsa.modeling_glm_moe_dsa import GlmMoeDsaModel
+
+    from liger_kernel.transformers.model.glm_moe_dsa import lce_forward as glm_moe_dsa_lce_forward
+
+    if rope:
+        logger.warning_once(
+            "rope=True is not supported for GLM-5 (glm_moe_dsa): interleaved partial RoPE is "
+            "incompatible with liger_rotary_pos_emb. Skipping rope kernel swap."
+        )
+
+    if rms_norm:
+        modeling_glm_moe_dsa.GlmMoeDsaRMSNorm = LigerRMSNorm
+
+    if cross_entropy:
+        from transformers.loss.loss_utils import nn
+
+        nn.functional.cross_entropy = liger_cross_entropy
+
+    if fused_linear_cross_entropy:
+        if model is not None:
+            model.forward = MethodType(glm_moe_dsa_lce_forward, model)
+        else:
+            modeling_glm_moe_dsa.GlmMoeDsaForCausalLM.forward = glm_moe_dsa_lce_forward
+
+    if swiglu:
+        modeling_glm_moe_dsa.GlmMoeDsaExperts = LigerExperts
+
+    if model is not None:
+        # The model instance already exists, so we need to additionally patch the
+        # instance variables that reference already-instantiated modules
+        base_model: GlmMoeDsaModel = getattr(model, model.base_model_prefix, model)
+
+        if rms_norm:
+            _patch_rms_norm_module(base_model.norm)
+        for decoder_layer in base_model.layers:
+            if rms_norm:
+                _patch_rms_norm_module(decoder_layer.input_layernorm)
+                _patch_rms_norm_module(decoder_layer.post_attention_layernorm)
+                if getattr(decoder_layer.self_attn, "q_a_layernorm", None) is not None:
+                    _patch_rms_norm_module(decoder_layer.self_attn.q_a_layernorm)
+                _patch_rms_norm_module(decoder_layer.self_attn.kv_a_layernorm)
+            if swiglu:
+                experts = getattr(decoder_layer.mlp, "experts", None)
+                if experts is not None:
+                    _patch_swiglu_module(experts, LigerExperts)
+                    shared_experts = getattr(decoder_layer.mlp, "shared_experts", None)
+                    if shared_experts is not None:
+                        _patch_swiglu_module(shared_experts, LigerSwiGLUMLP)
+                else:
+                    _patch_swiglu_module(decoder_layer.mlp, LigerSwiGLUMLP)
+
+
 def apply_liger_kernel_to_internvl(
     cross_entropy: bool = False,
     fused_linear_cross_entropy: bool = True,
@@ -3542,6 +3630,7 @@ MODEL_TYPE_TO_APPLY_LIGER_FN = {
     "glm4": apply_liger_kernel_to_glm4,
     "glm4v": apply_liger_kernel_to_glm4v,
     "glm4v_moe": apply_liger_kernel_to_glm4v_moe,
+    "glm_moe_dsa": apply_liger_kernel_to_glm_moe_dsa,
     "gpt_oss": apply_liger_kernel_to_gpt_oss,
     "internvl": apply_liger_kernel_to_internvl,
     "llama": apply_liger_kernel_to_llama,
