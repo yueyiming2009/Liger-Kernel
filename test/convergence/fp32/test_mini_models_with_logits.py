@@ -33,6 +33,7 @@ from liger_kernel.transformers import apply_liger_kernel_to_gemma3_text
 from liger_kernel.transformers import apply_liger_kernel_to_glm4
 from liger_kernel.transformers import apply_liger_kernel_to_glm4v
 from liger_kernel.transformers import apply_liger_kernel_to_glm4v_moe
+from liger_kernel.transformers import apply_liger_kernel_to_glm_moe_dsa
 from liger_kernel.transformers import apply_liger_kernel_to_granite
 from liger_kernel.transformers import apply_liger_kernel_to_hunyuan_v1_dense
 from liger_kernel.transformers import apply_liger_kernel_to_hunyuan_v1_moe
@@ -74,6 +75,7 @@ from test.utils import revert_liger_kernel_to_gemma3_text
 from test.utils import revert_liger_kernel_to_glm4
 from test.utils import revert_liger_kernel_to_glm4v
 from test.utils import revert_liger_kernel_to_glm4v_moe
+from test.utils import revert_liger_kernel_to_glm_moe_dsa
 from test.utils import revert_liger_kernel_to_granite
 from test.utils import revert_liger_kernel_to_hunyuan_v1
 from test.utils import revert_liger_kernel_to_hunyuan_v1_moe
@@ -336,6 +338,14 @@ try:
     DEEPSEEK_V4_AVAILABLE = True
 except ImportError:
     DEEPSEEK_V4_AVAILABLE = False
+
+try:
+    from transformers.models.glm_moe_dsa.configuration_glm_moe_dsa import GlmMoeDsaConfig
+    from transformers.models.glm_moe_dsa.modeling_glm_moe_dsa import GlmMoeDsaForCausalLM
+
+    GLM_MOE_DSA_AVAILABLE = True
+except ImportError:
+    GLM_MOE_DSA_AVAILABLE = False
 
 try:
     from transformers.models.exaone4.configuration_exaone4 import Exaone4Config
@@ -1538,6 +1548,37 @@ if DEEPSEEK_V4_AVAILABLE:
         ),
     )
 
+if GLM_MOE_DSA_AVAILABLE:
+    MINI_MODEL_SETUPS["mini_glm_moe_dsa"] = MiniModelConfig(
+        liger_kernel_patch_func=apply_liger_kernel_to_glm_moe_dsa,
+        liger_kernel_patch_revert_func=revert_liger_kernel_to_glm_moe_dsa,
+        model_class=GlmMoeDsaForCausalLM,
+        mini_model_config=GlmMoeDsaConfig(
+            vocab_size=32000,
+            hidden_size=32,
+            intermediate_size=64,
+            moe_intermediate_size=32,
+            num_hidden_layers=4,
+            num_attention_heads=2,
+            num_key_value_heads=2,
+            q_lora_rank=16,
+            kv_lora_rank=16,
+            qk_rope_head_dim=8,
+            qk_nope_head_dim=8,
+            v_head_dim=16,
+            n_routed_experts=4,
+            num_experts_per_tok=2,
+            n_shared_experts=1,
+            n_group=1,
+            topk_group=1,
+            first_k_dense_replace=1,
+            index_n_heads=2,
+            index_head_dim=16,
+            index_topk=8,
+            max_position_embeddings=128,
+        ),
+    )
+
 if EXAONE4_AVAILABLE:
     MINI_MODEL_SETUPS["mini_exaone4"] = MiniModelConfig(
         liger_kernel_patch_func=apply_liger_kernel_to_exaone4,
@@ -1629,6 +1670,7 @@ def run_mini_model(
             or "qwen3_next" in model_name
             or "qwen3_5" in model_name
             or "deepseek_v4" in model_name
+            or "glm_moe_dsa" in model_name
         ):
             kwargs["rope"] = False
 
@@ -2117,6 +2159,22 @@ def run_mini_model(
             marks=pytest.mark.skipif(
                 not DEEPSEEK_V4_AVAILABLE,
                 reason="DeepSeek-V4 not available in this version of transformers",
+            ),
+        ),
+        pytest.param(
+            "mini_glm_moe_dsa",
+            32,
+            1e-5,
+            torch.float32,
+            1e-5,
+            2e-3,
+            1e-1,
+            1e-2,
+            5e-3,
+            1e-5,
+            marks=pytest.mark.skipif(
+                not GLM_MOE_DSA_AVAILABLE,
+                reason="GLM-5 (glm_moe_dsa) not available in this version of transformers",
             ),
         ),
         pytest.param(

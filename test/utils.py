@@ -728,6 +728,18 @@ def revert_liger_kernel_to_glm4v_moe(model_config: MiniModelConfig):
     print("Liger kernel patches have been reverted.")
 
 
+def revert_liger_kernel_to_glm_moe_dsa(model_config: MiniModelConfig):
+    """
+    Revert all Liger kernel patches applied to GLM-5 (glm_moe_dsa).
+    """
+
+    from transformers.models.glm_moe_dsa import modeling_glm_moe_dsa
+
+    importlib.reload(modeling_glm_moe_dsa)
+    model_config.model_class = modeling_glm_moe_dsa.GlmMoeDsaForCausalLM
+    print("Liger kernel patches have been reverted.")
+
+
 def revert_liger_kernel_to_llava(model_config: MiniModelConfig):
     """
     Revert all Liger kernel patches applied to llava.
